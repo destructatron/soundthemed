@@ -28,6 +28,24 @@ pub struct Config {
     #[serde(default = "default_battery_critical")]
     pub battery_critical_percent: u8,
 
+    /// Battery percentage that counts as "charged" while charging (0 disables)
+    #[serde(default = "default_battery_charged")]
+    pub battery_charged_percent: u8,
+
+    /// Also count power-limit throttling (normal under any heavy load),
+    /// not just thermal throttling
+    #[serde(default)]
+    pub throttle_power_limits: bool,
+
+    /// Processor temperature (°C) that counts as running hot, on
+    /// machines that don't report throttling
+    #[serde(default = "default_thermal_hot")]
+    pub thermal_hot_celsius: u32,
+
+    /// Processor temperature (°C) it must drop below to count as cooled
+    #[serde(default = "default_thermal_cool")]
+    pub thermal_cool_celsius: u32,
+
     /// Play a sound when the daemon starts (e.g. "service-login", "complete", or a file path)
     /// Empty string or "none" to disable.
     #[serde(default = "default_startup_sound")]
@@ -70,6 +88,33 @@ pub struct SourceConfig {
 
     #[serde(default = "bool_true")]
     pub dbus_service: bool,
+
+    #[serde(default = "bool_true")]
+    pub camera: bool,
+
+    #[serde(default = "bool_true")]
+    pub microphone: bool,
+
+    #[serde(default = "bool_true")]
+    pub audio_output: bool,
+
+    #[serde(default = "bool_true")]
+    pub lid: bool,
+
+    #[serde(default = "bool_true")]
+    pub thermal: bool,
+
+    #[serde(default = "bool_true")]
+    pub power_profile: bool,
+
+    #[serde(default = "bool_true")]
+    pub mounts: bool,
+
+    #[serde(default = "bool_true")]
+    pub windows: bool,
+
+    #[serde(default = "bool_true")]
+    pub launches: bool,
 }
 
 fn default_theme() -> String {
@@ -86,6 +131,18 @@ fn default_battery_low() -> u8 {
 
 fn default_battery_critical() -> u8 {
     5
+}
+
+fn default_battery_charged() -> u8 {
+    80
+}
+
+fn default_thermal_hot() -> u32 {
+    95
+}
+
+fn default_thermal_cool() -> u32 {
+    80
 }
 
 fn default_startup_sound() -> String {
@@ -107,6 +164,10 @@ impl Default for Config {
             enabled: default_enabled(),
             battery_low_percent: default_battery_low(),
             battery_critical_percent: default_battery_critical(),
+            battery_charged_percent: default_battery_charged(),
+            throttle_power_limits: false,
+            thermal_hot_celsius: default_thermal_hot(),
+            thermal_cool_celsius: default_thermal_cool(),
             startup_sound: default_startup_sound(),
             shutdown_sound: default_shutdown_sound(),
             events: HashMap::new(),
@@ -125,6 +186,15 @@ impl Default for SourceConfig {
             volume: false,
             notifications: true,
             dbus_service: true,
+            camera: true,
+            microphone: true,
+            audio_output: true,
+            lid: true,
+            thermal: true,
+            power_profile: true,
+            mounts: true,
+            windows: true,
+            launches: true,
         }
     }
 }
@@ -260,13 +330,16 @@ pub fn save(config: &Config) -> std::io::Result<()> {
 /// Resolve the sound for an event, checking per-event overrides.
 /// Returns:
 ///   Some(Some(path)) - play this specific file
-///   Some(None) - event is silenced ("none")
+///   Some(None) - event is silenced ("none", or the named theme sound is missing)
 ///   None - use default theme resolution
 pub fn resolve_override(config: &Config, sound_id: &str) -> Option<Option<PathBuf>> {
     let value = config.events.get(sound_id)?;
     match value.as_str() {
         "default" => None,
         "none" => Some(None),
-        path => Some(Some(PathBuf::from(path))),
+        path if path.contains('/') => Some(Some(PathBuf::from(path))),
+        // A bare name is another sound ID from the active theme
+        // (this is what the config GUI's dropdown stores).
+        sound_id => Some(crate::theme::resolve(&config.theme, sound_id)),
     }
 }

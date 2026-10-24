@@ -1251,6 +1251,7 @@ dependencies = [
  "libc",
  "log",
  "serde",
+ "serde_json",
  "soundthemed-shared",
  "tokio",
  "toml 0.8.23",

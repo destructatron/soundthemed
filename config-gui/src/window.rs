@@ -20,7 +20,12 @@ pub fn build(app: &adw::Application) {
         .default_height(700)
         .build();
 
+    // Explicit AT-SPI wiring so Orca's "speak title" finds the window name.
+    window.set_accessible_role(gtk::AccessibleRole::Window);
+    window.update_property(&[gtk::accessible::Property::Label("soundthemed Configuration")]);
+
     let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new("soundthemed Configuration", "")));
 
     let content = adw::PreferencesPage::new();
 
@@ -172,6 +177,15 @@ pub fn build(app: &adw::Application) {
         ("volume", "Volume Changes", "Play a sound when system volume changes"),
         ("notifications", "Notifications", "Play sounds for desktop notifications"),
         ("dbus_service", "D-Bus Service", "Allow other apps to request sounds via D-Bus"),
+        ("camera", "Camera", "Play sounds when the camera turns on or off"),
+        ("microphone", "Microphone", "Play sounds when a microphone starts or stops recording"),
+        ("audio_output", "Audio Output", "Play a sound when the default audio output changes"),
+        ("lid", "Lid", "Play sounds when the laptop lid opens or closes"),
+        ("thermal", "Throttling", "Play sounds when the processor starts and stops throttling"),
+        ("power_profile", "Power Mode", "Play sounds when power saver or performance mode turns on or off"),
+        ("mounts", "Drives", "Play sounds when drives, or network and cloud folders in your home folder, are mounted or unmounted"),
+        ("windows", "Windows", "Play sounds when programs and windows open, close or gain focus, and for screenshots"),
+        ("launches", "Program Launches", "Play a sound as soon as a program starts launching"),
     ];
 
     for (key, title, subtitle) in source_defs {
@@ -184,6 +198,15 @@ pub fn build(app: &adw::Application) {
             "volume" => sources.volume,
             "notifications" => sources.notifications,
             "dbus_service" => sources.dbus_service,
+            "camera" => sources.camera,
+            "microphone" => sources.microphone,
+            "audio_output" => sources.audio_output,
+            "lid" => sources.lid,
+            "thermal" => sources.thermal,
+            "power_profile" => sources.power_profile,
+            "mounts" => sources.mounts,
+            "windows" => sources.windows,
+            "launches" => sources.launches,
             _ => true,
         };
 
@@ -206,6 +229,15 @@ pub fn build(app: &adw::Application) {
                 "volume" => cfg.sources.volume = v,
                 "notifications" => cfg.sources.notifications = v,
                 "dbus_service" => cfg.sources.dbus_service = v,
+                "camera" => cfg.sources.camera = v,
+                "microphone" => cfg.sources.microphone = v,
+                "audio_output" => cfg.sources.audio_output = v,
+                "lid" => cfg.sources.lid = v,
+                "thermal" => cfg.sources.thermal = v,
+                "power_profile" => cfg.sources.power_profile = v,
+                "mounts" => cfg.sources.mounts = v,
+                "windows" => cfg.sources.windows = v,
+                "launches" => cfg.sources.launches = v,
                 _ => {}
             }
         });
@@ -231,12 +263,20 @@ pub fn build(app: &adw::Application) {
             .subtitle(*description)
             .build();
 
-        // Build override options: Default, None, + theme sounds
+        // Build override options: Default, None, + theme sounds.
+        // `choices` holds the config value behind each option after
+        // the first two; a file path set in config.toml gets its own
+        // option, labelled with the file name.
         let options = gtk::StringList::new(&[]);
         options.append("Default");
         options.append("None");
-        for sound_id in &theme_sound_ids {
-            options.append(sound_id);
+        let mut choices = theme_sound_ids.clone();
+        let current = config.borrow().events.get(*event_id).cloned();
+        if let Some(path) = current.as_deref().filter(|v| v.contains('/')) {
+            choices.push(path.to_string());
+        }
+        for choice in &choices {
+            options.append(&override_label(choice));
         }
 
         let dropdown = gtk::DropDown::builder()
@@ -250,13 +290,11 @@ pub fn build(app: &adw::Application) {
         ))]);
 
         // Set current value from config
-        let current = config.borrow().events.get(*event_id).cloned();
         match current.as_deref() {
             Some("none") => dropdown.set_selected(1),
             Some("default") | None => dropdown.set_selected(0),
-            Some(path) => {
-                // Try to find it in the theme sounds list
-                if let Some(idx) = theme_sound_ids.iter().position(|s| s == path) {
+            Some(value) => {
+                if let Some(idx) = choices.iter().position(|s| s == value) {
                     dropdown.set_selected((idx + 2) as u32);
                 } else {
                     dropdown.set_selected(0);
@@ -266,7 +304,7 @@ pub fn build(app: &adw::Application) {
 
         let config_for_event = Rc::clone(&config);
         let event_id_owned = event_id.to_string();
-        let theme_sounds_for_cb = theme_sound_ids.clone();
+        let theme_sounds_for_cb = choices;
         dropdown.connect_selected_notify(move |dd| {
             let idx = dd.selected() as usize;
             let mut cfg = config_for_event.borrow_mut();
@@ -296,10 +334,16 @@ pub fn build(app: &adw::Application) {
             "Play {event_id}"
         ))]);
 
-        let theme_for_play = config.borrow().theme.clone();
+        let config_for_play = Rc::clone(&config);
         let event_id_for_play = event_id.to_string();
         play_btn.connect_clicked(move |_| {
-            if let Some(path) = theme::resolve(&theme_for_play, &event_id_for_play) {
+            // Preview what the daemon would play, overrides included
+            let cfg = config_for_play.borrow();
+            let path = match config::resolve_override(&cfg, &event_id_for_play) {
+                Some(path) => path,
+                None => theme::resolve(&cfg.theme, &event_id_for_play),
+            };
+            if let Some(path) = path {
                 std::process::Command::new("pw-play")
                     .arg(&path)
                     .spawn()
@@ -411,4 +455,16 @@ pub fn build(app: &adw::Application) {
 
     window.set_content(Some(&main_box));
     window.present();
+}
+
+/// Dropdown label for an override value: theme sound IDs as-is,
+/// file paths by file name.
+fn override_label(value: &str) -> String {
+    if !value.contains('/') {
+        return value.to_string();
+    }
+    std::path::Path::new(value)
+        .file_stem()
+        .map(|stem| format!("File: {}", stem.to_string_lossy()))
+        .unwrap_or_else(|| value.to_string())
 }

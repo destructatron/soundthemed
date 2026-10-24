@@ -6,7 +6,15 @@ A freedesktop sound agent that plays [sound theme](https://www.freedesktop.org/w
 
 - **USB hotplug** — plays `device-added` / `device-removed` when you plug or unplug a USB device
 - **Charger events** — plays `power-plug` / `power-unplug` instantly when the AC adapter state changes
-- **Battery warnings** — plays `battery-low` and `battery-caution` when battery drops below configurable thresholds (polled once per minute)
+- **Battery warnings** — plays `battery-low` and `battery-caution` when battery drops below configurable thresholds, and `battery-charged` / `battery-full` while charging (polled once per minute)
+- **Camera and microphone** — plays `camera-started` / `camera-stopped` when any app opens a `/dev/video*` camera (inotify, works for V4L2 and PipeWire apps alike), and `microphone-started` / `microphone-stopped` when a sound card or Bluetooth headset microphone starts capturing (PipeWire)
+- **Audio output** — plays `audio-output-changed` when the default PipeWire sink changes
+- **Lid** — `lid-open` / `lid-close`
+- **Throttling** — `thermal-throttling` / `thermal-cooled` when the processor starts and stops throttling. On AMD APUs with amdgpu `gpu_metrics` format 3.0 (Strix and later) this reads the firmware's throttle residency counters (thermal causes, plus power limits if `throttle_power_limits` is set); elsewhere it falls back to the CPU temperature crossing configurable hot/cool thresholds
+- **Power mode** — via power-profiles-daemon: `power-saver-on` / `performance-on` when entering those profiles, `power-saver-off` / `performance-off` when returning to balanced
+- **Drives** — plays `drive-mounted` / `drive-unmounted` for mounts under `/run/media`, `/media`, `/mnt` and inside your home folder (rclone, sshfs), whoever made them
+- **Windows** — on Niri, plays `window-new`, `window-close`, `window-switch` and `screen-capture`, plus `app-launched` when a program opens its first window, or, for programs that start in the system tray, when a freshly started process registers a tray icon with no window. When its last window closes, its process is watched: `app-closed` plays when it exits; if it keeps running (e.g. in the system tray) `app-hidden` plays instead, then `app-unhidden` if a window comes back and `app-closed` once it really exits
+- **Program launches** — plays `app-launching` as soon as a program starts, from systemd `app-*.scope` units (niri `spawn` keybindings count only for commands with a desktop entry). Launchers that start programs directly can call `PlaySound("app-launching")` on the D-Bus service instead
 - **Network connectivity** — plays sounds on connect/disconnect via NetworkManager
 - **Session events** — plays sounds on suspend resume and screen unlock via systemd-logind
 - **Desktop notifications** — plays `message` or `dialog-warning` for incoming notifications (respects `suppress-sound` hint)
@@ -34,7 +42,8 @@ soundthemed is a Cargo workspace with three crates:
 ## Requirements
 
 - Linux with udev
-- PipeWire (`pw-play` in PATH)
+- PipeWire (`pw-play` in PATH; `pw-dump` for microphone, audio output and volume sounds)
+- playerctl (optional; volume sounds stay quiet while media is playing)
 - A freedesktop-compatible sound theme installed (most distros ship one)
 - D-Bus session bus (for network, session, notification, and D-Bus service features)
 - NetworkManager (for network connectivity sounds)
@@ -118,6 +127,15 @@ enabled = true
 # Battery warning thresholds (percentage)
 battery_low_percent = 15
 battery_critical_percent = 5
+battery_charged_percent = 80    # 0 disables battery-charged
+
+# Count power-limit throttling too (engages on any heavy load)
+throttle_power_limits = false
+
+# Processor temperature thresholds (°C), used where throttling
+# can't be read directly
+thermal_hot_celsius = 95
+thermal_cool_celsius = 80
 
 # Startup/shutdown sounds (sound event ID, file path, or "none")
 startup_sound = "soundthemed-start"
@@ -132,8 +150,18 @@ session = true
 volume = false          # disabled by default
 notifications = true
 dbus_service = true
+camera = true
+microphone = true
+audio_output = true
+lid = true
+thermal = true
+power_profile = true
+mounts = true
+windows = true          # Niri window and screenshot sounds (the bell is always on)
+launches = true
 
-# Per-event overrides: "default", "none", or a file path
+# Per-event overrides: "default", "none", a file path, or another
+# sound ID from the active theme
 [events]
 device-added = "default"
 device-removed = "none"       # silence this event

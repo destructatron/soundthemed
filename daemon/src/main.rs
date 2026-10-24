@@ -11,12 +11,19 @@
 //!   soundthemed create-theme ... # create theme from folder
 
 mod battery;
+mod camera;
 mod dbus_service;
+mod launches;
+mod lid;
+mod mounts;
 mod network;
 mod niri;
 mod notifications;
+mod pipewire;
 mod player;
+mod power_profile;
 mod session;
+mod thermal;
 mod udev_monitor;
 mod volume;
 
@@ -25,6 +32,7 @@ use soundthemed_shared::config;
 use soundthemed_shared::sound_ids::SoundEvent;
 use soundthemed_shared::theme;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
@@ -117,6 +125,12 @@ async fn run_daemon() {
 
     let (tx, mut rx) = mpsc::channel::<SoundEvent>(32);
 
+    // Set while a suspend/hibernate is in progress (toggled by the session
+    // source on logind PrepareForSleep). Mutes event sounds that would otherwise
+    // be started into an audio device being frozen for sleep -> audible HDA DMA
+    // loop. The wake sound is allowed through on resume.
+    let suspending = Arc::new(AtomicBool::new(false));
+
     // Spawn event sources based on config
     {
         let sources = &cfg.read().unwrap().sources;
@@ -130,8 +144,9 @@ async fn run_daemon() {
             let battery_tx = tx.clone();
             let low = cfg.read().unwrap().battery_low_percent;
             let crit = cfg.read().unwrap().battery_critical_percent;
+            let charged = cfg.read().unwrap().battery_charged_percent;
             tokio::spawn(async move {
-                battery::watch(battery_tx, low, crit).await;
+                battery::watch(battery_tx, low, crit, charged).await;
             });
         }
 
@@ -144,17 +159,12 @@ async fn run_daemon() {
 
         if sources.session {
             let session_tx = tx.clone();
+            let session_suspending = Arc::clone(&suspending);
             tokio::spawn(async move {
-                session::watch(session_tx).await;
+                session::watch(session_tx, session_suspending).await;
             });
         }
 
-        if sources.volume {
-            let vol_tx = tx.clone();
-            tokio::spawn(async move {
-                volume::watch(vol_tx).await;
-            });
-        }
 
         if sources.notifications {
             let notif_tx = tx.clone();
@@ -163,11 +173,57 @@ async fn run_daemon() {
             });
         }
 
-        // Niri compositor bell detection (auto-detects, no config needed)
+        if sources.camera {
+            camera::spawn(tx.clone());
+        }
+
+        if sources.microphone || sources.audio_output || sources.volume {
+            let volume = sources.volume.then(|| volume::spawn(tx.clone()));
+            pipewire::spawn(tx.clone(), sources.microphone, sources.audio_output, volume);
+        }
+
+        if sources.lid {
+            let lid_tx = tx.clone();
+            tokio::spawn(async move {
+                lid::watch(lid_tx).await;
+            });
+        }
+
+        if sources.thermal {
+            let thermal_tx = tx.clone();
+            let power_limits = cfg.read().unwrap().throttle_power_limits;
+            let hot = cfg.read().unwrap().thermal_hot_celsius;
+            let cool = cfg.read().unwrap().thermal_cool_celsius;
+            tokio::spawn(async move {
+                thermal::watch(thermal_tx, power_limits, hot, cool).await;
+            });
+        }
+
+        if sources.power_profile {
+            let profile_tx = tx.clone();
+            tokio::spawn(async move {
+                power_profile::watch(profile_tx).await;
+            });
+        }
+
+        if sources.mounts {
+            mounts::spawn(tx.clone());
+        }
+
+        if sources.launches {
+            let launch_tx = tx.clone();
+            tokio::spawn(async move {
+                launches::watch(launch_tx).await;
+            });
+        }
+
+        // Niri compositor events (auto-detects); the bell is always on,
+        // window and screenshot sounds follow the "windows" source.
         {
             let niri_tx = tx.clone();
+            let windows = sources.windows;
             tokio::spawn(async move {
-                niri::watch(niri_tx).await;
+                niri::watch(niri_tx, windows).await;
             });
         }
 
@@ -204,6 +260,16 @@ async fn run_daemon() {
             Some(event) = rx.recv() => {
                 let id = event.sound_id();
                 log::debug!("event: {id}");
+
+                // While a suspend/hibernate is in progress, drop event sounds:
+                // starting playback into a device being frozen causes an audible
+                // HDA DMA loop. The resume (wake) sound is allowed through.
+                if suspending.load(Ordering::SeqCst)
+                    && !matches!(event, SoundEvent::SuspendResume)
+                {
+                    log::debug!("suspend in progress, suppressing sound: {id}");
+                    continue;
+                }
 
                 let cfg_guard = cfg.read().unwrap();
 

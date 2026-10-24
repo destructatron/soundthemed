@@ -1,58 +1,45 @@
-//! Audio volume change monitoring via WirePlumber (wpctl).
+//! Audio volume change sounds.
 //!
-//! Polls the default sink volume periodically and fires an event
-//! when the volume changes, with debouncing to avoid spamming
-//! during continuous adjustment (e.g. holding a volume key or
-//! turning a dial). Fires once when a change is first detected,
-//! then suppresses until the volume stabilises.
+//! The PipeWire monitor (pipewire.rs) notices the default sink's
+//! volume or mute changing and pokes this module, which fires an
+//! event for each change, rate-limited by COOLDOWN.
+//!
+//! Suppresses the volume sound while any MPRIS-compatible media
+//! player is in the Playing state (Spotify, VLC, etc.) — checked
+//! via `playerctl -a status`.
 
 use soundthemed_shared::sound_ids::SoundEvent;
 use tokio::sync::mpsc;
-use tokio::time::{self, Duration, Instant};
+use tokio::time::{Duration, Instant};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const COOLDOWN: Duration = Duration::from_millis(20);
 
-/// Start watching for volume changes.
-pub async fn watch(tx: mpsc::Sender<SoundEvent>) {
-    if let Err(e) = watch_inner(tx).await {
-        log::error!("volume monitor error: {e}");
-    }
+/// Start the volume sound task. Returns the sender the PipeWire
+/// monitor pokes on every default sink volume change.
+pub fn spawn(tx: mpsc::Sender<SoundEvent>) -> mpsc::Sender<()> {
+    let (poke_tx, poke_rx) = mpsc::channel::<()>(8);
+    tokio::spawn(watch(poke_rx, tx));
+    poke_tx
 }
 
-async fn watch_inner(tx: mpsc::Sender<SoundEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    log::info!("volume: watching via wpctl polling");
+async fn watch(mut poke_rx: mpsc::Receiver<()>, tx: mpsc::Sender<SoundEvent>) {
+    log::info!("volume: watching default sink via PipeWire");
 
-    let mut last_volume = get_volume().await;
-    let mut interval = time::interval(POLL_INTERVAL);
-    let mut last_sound = Instant::now() - COOLDOWN; // allow first sound immediately
+    let mut last_sound = Instant::now() - COOLDOWN;
 
-    // Skip the first tick
-    interval.tick().await;
-
-    loop {
-        interval.tick().await;
-
-        let current = get_volume().await;
-        if current != last_volume {
-            last_volume = current;
-
-            // Only play if enough time has passed and no media is playing
-            let now = Instant::now();
-            if now.duration_since(last_sound) >= COOLDOWN && !is_media_playing().await {
-                last_sound = now;
-                log::debug!("volume: change detected, playing sound");
-                if tx.send(SoundEvent::AudioVolumeChange).await.is_err() {
-                    break;
-                }
+    while poke_rx.recv().await.is_some() {
+        let now = Instant::now();
+        if now.duration_since(last_sound) >= COOLDOWN && !is_media_playing().await {
+            last_sound = now;
+            log::debug!("volume: change detected, playing sound");
+            if tx.send(SoundEvent::AudioVolumeChange).await.is_err() {
+                break;
             }
         }
     }
-
-    Ok(())
 }
 
-/// Check if any media player is currently playing.
+/// Check whether any MPRIS media player is currently Playing.
 async fn is_media_playing() -> bool {
     let output = tokio::process::Command::new("playerctl")
         .args(["-a", "status"])
@@ -66,21 +53,4 @@ async fn is_media_playing() -> bool {
         }
         _ => false,
     }
-}
-
-/// Get the current default sink volume level.
-async fn get_volume() -> Option<String> {
-    let output = tokio::process::Command::new("wpctl")
-        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8(output.stdout).ok()?;
-    text.strip_prefix("Volume: ")
-        .map(|s| s.trim().to_string())
 }

@@ -27,6 +27,38 @@ pub enum SoundEvent {
 
     // Audio events
     AudioVolumeChange,
+    AudioOutputChanged,
+
+    // Privacy indicators
+    CameraStarted,
+    CameraStopped,
+    MicrophoneStarted,
+    MicrophoneStopped,
+
+    // Hardware state
+    LidOpened,
+    LidClosed,
+    ThermalThrottling,
+    ThermalCooled,
+    PowerSaverOn,
+    PowerSaverOff,
+    PerformanceOn,
+    PerformanceOff,
+    BatteryFull,
+    BatteryCharged,
+    DriveMounted,
+    DriveUnmounted,
+
+    // Compositor
+    AppLaunching,
+    AppLaunched,
+    AppClosed,
+    AppHidden,
+    AppUnhidden,
+    WindowNew,
+    WindowClose,
+    WindowSwitch,
+    ScreenCapture,
 
     // D-Bus requested (any freedesktop sound ID)
     Custom(String),
@@ -48,6 +80,32 @@ impl SoundEvent {
             Self::SessionLogout => "service-logout",
             Self::SuspendResume => "service-login",
             Self::AudioVolumeChange => "audio-volume-change",
+            Self::AudioOutputChanged => "audio-output-changed",
+            Self::CameraStarted => "camera-started",
+            Self::CameraStopped => "camera-stopped",
+            Self::MicrophoneStarted => "microphone-started",
+            Self::MicrophoneStopped => "microphone-stopped",
+            Self::LidOpened => "lid-open",
+            Self::LidClosed => "lid-close",
+            Self::ThermalThrottling => "thermal-throttling",
+            Self::ThermalCooled => "thermal-cooled",
+            Self::PowerSaverOn => "power-saver-on",
+            Self::PowerSaverOff => "power-saver-off",
+            Self::PerformanceOn => "performance-on",
+            Self::PerformanceOff => "performance-off",
+            Self::BatteryFull => "battery-full",
+            Self::BatteryCharged => "battery-charged",
+            Self::DriveMounted => "drive-mounted",
+            Self::DriveUnmounted => "drive-unmounted",
+            Self::AppLaunching => "app-launching",
+            Self::AppLaunched => "app-launched",
+            Self::AppClosed => "app-closed",
+            Self::AppHidden => "app-hidden",
+            Self::AppUnhidden => "app-unhidden",
+            Self::WindowNew => "window-new",
+            Self::WindowClose => "window-close",
+            Self::WindowSwitch => "window-switch",
+            Self::ScreenCapture => "screen-capture",
             Self::Custom(id) => id.as_str(),
         }
     }
@@ -90,6 +148,36 @@ pub const ALL_SOUND_IDS: &[(&str, &str)] = &[
     // Power
     ("power-plug", "Power cable plugged in"),
     ("power-unplug", "Power cable unplugged"),
+    ("battery-full", "Battery fully charged"),
+    ("battery-charged", "Battery charged to the set level"),
+    ("power-saver-on", "Power saver mode turned on"),
+    ("power-saver-off", "Power saver mode turned off"),
+    ("performance-on", "Performance mode turned on"),
+    ("performance-off", "Performance mode turned off"),
+
+    // Privacy
+    ("camera-started", "Camera turned on"),
+    ("camera-stopped", "Camera turned off"),
+    ("microphone-started", "Microphone in use"),
+    ("microphone-stopped", "Microphone no longer in use"),
+
+    // Hardware
+    ("lid-open", "Laptop lid opened"),
+    ("lid-close", "Laptop lid closed"),
+    ("thermal-throttling", "Processor throttling"),
+    ("thermal-cooled", "Processor no longer throttling"),
+    ("drive-mounted", "Drive mounted"),
+    ("drive-unmounted", "Drive unmounted"),
+
+    // Programs and windows
+    ("app-launching", "Program starting"),
+    ("app-launched", "Program opened its first window"),
+    ("app-closed", "Program exited"),
+    ("app-hidden", "Program closed its windows but kept running"),
+    ("app-unhidden", "Background program opened a window again"),
+    ("window-new", "Window opened"),
+    ("window-close", "Window closed"),
+    ("window-switch", "Window focus changed"),
 
     // Session
     ("service-login", "Session login or unlock"),
@@ -101,6 +189,7 @@ pub const ALL_SOUND_IDS: &[(&str, &str)] = &[
 
     // Audio
     ("audio-volume-change", "Volume level changed"),
+    ("audio-output-changed", "Default audio output changed"),
     ("audio-channel-front-left", "Audio test: front left"),
     ("audio-channel-front-right", "Audio test: front right"),
     ("audio-channel-front-center", "Audio test: front center"),
