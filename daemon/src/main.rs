@@ -32,6 +32,7 @@ use soundthemed_shared::config;
 use soundthemed_shared::sound_ids::SoundEvent;
 use soundthemed_shared::theme;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
@@ -124,6 +125,12 @@ async fn run_daemon() {
 
     let (tx, mut rx) = mpsc::channel::<SoundEvent>(32);
 
+    // Set while a suspend/hibernate is in progress (toggled by the session
+    // source on logind PrepareForSleep). Mutes event sounds that would otherwise
+    // be started into an audio device being frozen for sleep -> audible HDA DMA
+    // loop. The wake sound is allowed through on resume.
+    let suspending = Arc::new(AtomicBool::new(false));
+
     // Spawn event sources based on config
     {
         let sources = &cfg.read().unwrap().sources;
@@ -152,8 +159,9 @@ async fn run_daemon() {
 
         if sources.session {
             let session_tx = tx.clone();
+            let session_suspending = Arc::clone(&suspending);
             tokio::spawn(async move {
-                session::watch(session_tx).await;
+                session::watch(session_tx, session_suspending).await;
             });
         }
 
@@ -252,6 +260,16 @@ async fn run_daemon() {
             Some(event) = rx.recv() => {
                 let id = event.sound_id();
                 log::debug!("event: {id}");
+
+                // While a suspend/hibernate is in progress, drop event sounds:
+                // starting playback into a device being frozen causes an audible
+                // HDA DMA loop. The resume (wake) sound is allowed through.
+                if suspending.load(Ordering::SeqCst)
+                    && !matches!(event, SoundEvent::SuspendResume)
+                {
+                    log::debug!("suspend in progress, suppressing sound: {id}");
+                    continue;
+                }
 
                 let cfg_guard = cfg.read().unwrap();
 
